@@ -50,7 +50,7 @@ const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 const norm=t=>t.toLowerCase().replace(/[^a-z0-9ऀ-࿿ ]/g,'').replace(/\s+/g,' ').trim();
 const N=()=>S.players.length, singer=()=>S.players[S.cur], guesser=()=>S.players[(S.cur+1)%N()];
 
-function ensureCtx(){if(!ctx)ctx=new AC();if(ctx.state==='suspended')ctx.resume();}
+function ensureCtx(){try{navigator.audioSession.type='playback'}catch(e){}if(!ctx)ctx=new AC();if(ctx.state==='suspended')ctx.resume();}
 async function getMic(){
   if(stream&&stream.active)return stream;
   stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false}});
@@ -70,7 +70,8 @@ function stopRec(){
   return new Promise(res=>{
     rec.onstop=async()=>{
       S.recording=false;
-      try{res(await ctx.decodeAudioData(await new Blob(chunks,{type:rec.mimeType}).arrayBuffer()));}
+      if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+      try{res(norm_(await ctx.decodeAudioData(await new Blob(chunks,{type:rec.mimeType}).arrayBuffer())));}
       catch(e){S.err='Could not read the recording. Try again.';res(null);}
     };
     rec.stop();
@@ -82,6 +83,11 @@ async function toggleRec(key){
   if(b){S[key]=b;if(key==='buf')S.rev=reversed(b);}
   render();
 }
+function norm_(b){
+  let m=0;for(let c=0;c<b.numberOfChannels;c++){const d=b.getChannelData(c);for(let i=0;i<d.length;i++){const v=Math.abs(d[i]);if(v>m)m=v;}}
+  if(m>0.001){const g=0.95/m;for(let c=0;c<b.numberOfChannels;c++){const d=b.getChannelData(c);for(let i=0;i<d.length;i++)d[i]*=g;}}
+  return b;
+}
 function reversed(b){
   const r=ctx.createBuffer(b.numberOfChannels,b.length,b.sampleRate);
   for(let c=0;c<b.numberOfChannels;c++)r.getChannelData(c).set(b.getChannelData(c).slice().reverse());
@@ -89,7 +95,7 @@ function reversed(b){
 }
 function play(buffer,rate=1){
   ensureCtx();stopPlay();
-  const s=ctx.createBufferSource();s.buffer=buffer;s.playbackRate.value=rate;s.connect(ctx.destination);
+  const s=ctx.createBufferSource();s.buffer=buffer;s.playbackRate.value=rate;const gn=ctx.createGain();gn.gain.value=2.5;const cp=ctx.createDynamicsCompressor();cp.threshold.value=-12;cp.ratio.value=12;s.connect(gn);gn.connect(cp);cp.connect(ctx.destination);
   s.onended=()=>{if(S.playing===s){S.playing=null;render();}};
   S.playing=s;S.pb=buffer;S.pstart=ctx.currentTime;S.prate=rate;s.start();render();raf();
 }
