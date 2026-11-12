@@ -45,7 +45,7 @@ const CATS=['Hindi','Telugu','English','Kids','Movie','Other'];
 const SONGS=['Happy Birthday','Twinkle Twinkle Little Star','Jingle Bells','Despacito','Kal Ho Naa Ho','Tum Hi Ho','Chaiyya Chaiyya','Butta Bomma','Ramuloo Ramulaa','Naatu Naatu','Shape of You','Perfect','Baby Shark','Let It Go','Bohemian Rhapsody','Yellow Submarine','Jai Ho','Kabhi Khushi Kabhie Gham','Senorita','Titanic My Heart Will Go On','Row Row Row Your Boat','Lungi Dance','Srivalli','Believer'];
 const S={step:'setup',players:[{name:'Player 1',score:0},{name:'Player 2',score:0}],listens:5,limit:30,rpp:1,
   cur:0,round:0,total:2,title:'',cat:'Other',buf:null,rev:null,take:null,guess:'',left:0,hint:false,speed:1,
-  recording:false,t:0,playing:null,pb:null,pstart:0,prate:1,err:'',scored:false,hum:0,pts:0};
+  heard:false,recording:false,t:0,playing:null,pb:null,pstart:0,prate:1,err:'',scored:false,hum:0,pts:0};
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const norm=t=>t.toLowerCase().replace(/[^a-z0-9ऀ-࿿ ]/g,'').replace(/\s+/g,' ').trim();
 const N=()=>S.players.length, singer=()=>S.players[S.cur], guesser=()=>S.players[(S.cur+1)%N()];
@@ -71,7 +71,7 @@ function stopRec(){
   return new Promise(res=>{
     rec.onstop=async()=>{
       S.recording=false;
-      if(stream)stream.getTracks().forEach(t=>t.enabled=false);
+      if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
       try{navigator.audioSession.type='playback'}catch(e){}
       try{res(norm_(await ctx.decodeAudioData(await new Blob(chunks,{type:rec.mimeType}).arrayBuffer())));}
       catch(e){S.err='Could not read the recording. Try again.';res(null);}
@@ -82,7 +82,7 @@ function stopRec(){
 async function toggleRec(key){
   if(!S.recording){await startRec(key);return;}
   const b=await stopRec();
-  if(b){S[key]=b;if(key==='buf')S.rev=reversed(b);}
+  if(b){S[key]=b;if(key==='buf'){S.rev=reversed(b);S.heard=false;}}
   render();
 }
 function norm_(b){
@@ -95,13 +95,16 @@ function reversed(b){
   for(let c=0;c<b.numberOfChannels;c++)r.getChannelData(c).set(b.getChannelData(c).slice().reverse());
   return r;
 }
+const urls=new WeakMap();
+function url(b){let u=urls.get(b);if(!u){u=URL.createObjectURL(wav(b,3));urls.set(b,u);}return u;}
 function play(buffer,rate=1){
   ensureCtx();stopPlay();
-  const s=ctx.createBufferSource();s.buffer=buffer;s.playbackRate.value=rate;const gn=ctx.createGain();gn.gain.value=2.5;const cp=ctx.createDynamicsCompressor();cp.threshold.value=-12;cp.ratio.value=12;s.connect(gn);gn.connect(cp);cp.connect(ctx.destination);
-  s.onended=()=>{if(S.playing===s){S.playing=null;render();}};
-  S.playing=s;S.pb=buffer;S.pstart=ctx.currentTime;S.prate=rate;s.start();render();raf();
+  if(S.step==='sing')S.heard=true;
+  const a=new Audio(url(buffer));a.volume=1;a.playbackRate=rate;a.preservesPitch=false;a.webkitPreservesPitch=false;
+  a.onended=()=>{if(S.playing===a){S.playing=null;render();}};
+  S.playing=a;S.pb=buffer;a.play().catch(()=>{S.playing=null;});render();raf();
 }
-function stopPlay(){const s=S.playing;S.playing=null;if(s){try{s.stop()}catch(e){}}}
+function stopPlay(){const a=S.playing;S.playing=null;if(a)a.pause();}
 function raf(){drawWf();if(S.playing)requestAnimationFrame(raf);}
 function drawWf(){
   const c=document.getElementById('wf');if(!c)return;
@@ -111,7 +114,7 @@ function drawWf(){
   const d=b.getChannelData(0),step=Math.ceil(d.length/w);g.fillStyle='#ff5c8a';
   for(let x=0;x<w;x++){let m=0;for(let i=0;i<step;i+=8)m=Math.max(m,Math.abs(d[x*step+i]||0));
     const y=Math.max(2,m*h);g.fillRect(x,(h-y)/2,1,y);}
-  if(S.playing){const p=Math.min(1,(ctx.currentTime-S.pstart)*S.prate/b.duration);g.fillStyle='#fff';g.fillRect(p*w,0,3,h);}
+  if(S.playing){const p=Math.min(1,S.playing.currentTime/(S.playing.duration||b.duration));g.fillStyle='#fff';g.fillRect(p*w,0,3,h);}
 }
 function env(b){
   const d=b.getChannelData(0),bins=40,out=[],sz=Math.floor(d.length/bins)||1;
@@ -122,13 +125,13 @@ function corr(a,b){
   for(let i=0;i<n;i++){t+=(a[i]-ma)*(b[i]-mb);va+=(a[i]-ma)**2;vb+=(b[i]-mb)**2;}
   return t/Math.sqrt(va*vb||1);
 }
-function wav(b){
+function wav(b,boost=1){
   const d=b.getChannelData(0),buf=new ArrayBuffer(44+d.length*2),v=new DataView(buf);
   const ws=(o,s)=>[...s].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));
   ws(0,'RIFF');v.setUint32(4,36+d.length*2,true);ws(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);
   v.setUint16(22,1,true);v.setUint32(24,b.sampleRate,true);v.setUint32(28,b.sampleRate*2,true);v.setUint16(32,2,true);
   v.setUint16(34,16,true);ws(36,'data');v.setUint32(40,d.length*2,true);
-  for(let i=0;i<d.length;i++)v.setInt16(44+i*2,Math.max(-1,Math.min(1,d[i]))*32767,true);
+  for(let i=0;i<d.length;i++)v.setInt16(44+i*2,(boost>1?Math.tanh(d[i]*boost)/Math.tanh(boost):Math.max(-1,Math.min(1,d[i])))*32767,true);
   return new Blob([buf],{type:'audio/wav'});
 }
 async function share(){
@@ -165,9 +168,10 @@ function render(){
       <select id="cat" onchange="S.cat=this.value">${CATS.map(c=>`<option ${c===S.cat?'selected':''}>${c}</option>`).join('')}</select>
       <button class="${S.recording?'rec':'p'}" onclick="toggleRec('buf')">${S.recording?`⏹ Stop (<span id="tm">${S.t}s</span>)`:(S.buf?'🔁 Re-record':'⏺ Record')}</button>
       ${S.buf&&!S.recording?`<canvas id="wf"></canvas>
-      <div class="row"><button onclick="play(S.buf)">▶ Forward</button><button onclick="play(S.rev)">◀ Reversed</button></div>
+      <div class="row"><button onclick="play(S.buf)">▶ Hear my song</button><button onclick="play(S.rev)">◀ Hear reversed</button></div>
       ${S.playing?`<button onclick="stopPlay();render()">⏹ Stop playing</button>`:''}
-      <button id="lock" class="g" onclick="lockIn()">✅ Lock it in</button>`:''}
+      <button id="lock" class="g" onclick="lockIn()" ${S.heard?'':'disabled'}>✅ Done, lock it in</button>
+      ${S.heard?'':'<small>Listen to your recording first.</small>'}`:''}
     </div>`;
   }
   else if(S.step==='pass'){
@@ -210,8 +214,8 @@ function render(){
 function lockState(){}
 function readNames(){S.players.forEach((p,i)=>{const e=document.getElementById('n'+i);if(e)p.name=e.value||'Player '+(i+1);});}
 function addP(d){readNames();if(d>0)S.players.push({name:'Player '+(N()+1),score:0});else S.players.pop();render();}
-function start(){ensureCtx();getMic().then(t=>t.getTracks().forEach(x=>x.enabled=false)).catch(()=>{});readNames();S.players.forEach(p=>p.score=0);S.cur=0;S.round=0;S.total=N()*S.rpp;newRound();}
-function newRound(){stopPlay();S.step='sing';S.buf=S.rev=S.take=S.pb=null;S.title='';S.guess='';S.hint=false;S.scored=false;S.decided=false;S.hum=0;S.pts=0;S.err='';render();}
+function start(){ensureCtx();getMic().then(t=>{t.getTracks().forEach(x=>x.stop());stream=null;}).catch(()=>{});readNames();S.players.forEach(p=>p.score=0);S.cur=0;S.round=0;S.total=N()*S.rpp;newRound();}
+function newRound(){stopPlay();S.step='sing';S.buf=S.rev=S.take=S.pb=null;S.title='';S.guess='';S.hint=false;S.heard=false;S.scored=false;S.decided=false;S.hum=0;S.pts=0;S.err='';render();}
 function lockIn(){stopPlay();S.left=S.listens;S.take=null;S.pb=null;S.guess='';S.hint=false;S.step='pass';render();}
 function listen(){if(S.left<1)return;S.left--;play(S.rev,S.speed);}
 function getHint(){if(S.left<2)return;S.left--;S.hint=true;render();}
