@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#1b1033">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
 <title>Reverse Singing</title>
 <style>
 :root{--bg:#1b1033;--card:#2a1b4d;--fg:#f4eefe;--mut:#b9a9d9;--acc:#ff5c8a;--ok:#3ddc97;--bad:#ff6b6b}
@@ -14,133 +17,216 @@ main{width:100%;max-width:440px}
 h1{font-size:24px;margin:4px 0 2px;text-align:center}
 .sub{color:var(--mut);text-align:center;margin:0 0 14px}
 .card{background:var(--card);border-radius:16px;padding:16px;margin-bottom:12px}
-button{font:inherit;font-weight:600;border:0;border-radius:12px;padding:14px;width:100%;margin-top:8px;background:#4a3585;color:var(--fg)}
+button,select{font:inherit;font-weight:600;border:0;border-radius:12px;padding:14px;width:100%;margin-top:8px;background:#4a3585;color:var(--fg)}
+select{font-weight:400}
 button.p{background:var(--acc)}button.g{background:var(--ok);color:#052}
 button:disabled{opacity:.4}
 input{font:inherit;width:100%;padding:12px;border-radius:10px;border:0;margin-top:6px}
 .row{display:flex;gap:8px}.row>*{flex:1}
 .opt.sel{background:var(--acc)}
-.score{display:flex;justify-content:space-around;color:var(--mut);margin-bottom:10px}
-.score b{color:var(--fg)}
+.score{display:flex;flex-wrap:wrap;justify-content:space-around;gap:6px;color:var(--mut);margin-bottom:10px;font-size:15px}
+.score b{color:var(--fg)}.score .me{color:var(--acc)}
 .big{font-size:34px;text-align:center;margin:6px 0}
 .rec{background:var(--bad)!important;animation:p 1s infinite}
 @keyframes p{50%{opacity:.6}}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
 small{color:var(--mut)}
+canvas{width:100%;height:70px;background:#1b1033;border-radius:10px;margin-top:8px;display:block}
+.hint{background:#3b2a6e;border-radius:10px;padding:10px;margin-top:8px}
 </style>
 </head>
 <body>
 <main id="app"></main>
 <script>
-const $app = document.getElementById('app');
-const AC = window.AudioContext || window.webkitAudioContext;
-let ctx, stream;
-const S = {step:'setup', names:['Player 1','Player 2'], scores:[0,0], singer:0, listens:5,
-  left:0, title:'', buf:null, take:null, guess:'', playing:null, recording:false, err:''};
+const $app=document.getElementById('app');
+const AC=window.AudioContext||window.webkitAudioContext;
+let ctx,stream,rec,chunks,timer;
+const CATS=['Hindi','Telugu','English','Kids','Movie','Other'];
+const SONGS=['Happy Birthday','Twinkle Twinkle Little Star','Jingle Bells','Despacito','Kal Ho Naa Ho','Tum Hi Ho','Chaiyya Chaiyya','Butta Bomma','Ramuloo Ramulaa','Naatu Naatu','Shape of You','Perfect','Baby Shark','Let It Go','Bohemian Rhapsody','Yellow Submarine','Jai Ho','Kabhi Khushi Kabhie Gham','Senorita','Titanic My Heart Will Go On','Row Row Row Your Boat','Lungi Dance','Srivalli','Believer'];
+const S={step:'setup',players:[{name:'Player 1',score:0},{name:'Player 2',score:0}],listens:5,limit:30,rpp:1,
+  cur:0,round:0,total:2,title:'',cat:'Other',buf:null,rev:null,take:null,guess:'',left:0,hint:false,speed:1,
+  recording:false,t:0,playing:null,pb:null,pstart:0,prate:1,err:'',scored:false,hum:0,pts:0};
+const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const norm=t=>t.toLowerCase().replace(/[^a-z0-9ऀ-࿿ ]/g,'').replace(/\s+/g,' ').trim();
+const N=()=>S.players.length, singer=()=>S.players[S.cur], guesser=()=>S.players[(S.cur+1)%N()];
 
-function ensureCtx(){ if(!ctx) ctx = new AC(); if(ctx.state==='suspended') ctx.resume(); }
+function ensureCtx(){if(!ctx)ctx=new AC();if(ctx.state==='suspended')ctx.resume();}
 async function getMic(){
-  if(stream && stream.active) return stream;
-  stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false}});
+  if(stream&&stream.active)return stream;
+  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false}});
   return stream;
 }
-let rec, chunks;
-async function startRec(){
-  ensureCtx(); stopPlay();
+async function startRec(key){
+  ensureCtx();stopPlay();
   try{
-    const st = await getMic();
-    chunks=[]; rec = new MediaRecorder(st);
+    const st=await getMic();chunks=[];rec=new MediaRecorder(st);
     rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
-    rec.start(); S.recording=true; S.err=''; render();
-  }catch(e){ S.err='Microphone blocked. Allow mic access and use https.'; render(); }
+    rec.start();S.recording=true;S.err='';S.t=S.limit;render();
+    timer=setInterval(()=>{S.t--;const el=document.getElementById('tm');if(el)el.textContent=S.t+'s';if(S.t<=0)toggleRec(key);},1000);
+  }catch(e){S.err='Microphone blocked. Allow mic access (needs https).';render();}
 }
 function stopRec(){
+  clearInterval(timer);
   return new Promise(res=>{
     rec.onstop=async()=>{
       S.recording=false;
-      const blob = new Blob(chunks,{type:rec.mimeType});
-      try{ res(await ctx.decodeAudioData(await blob.arrayBuffer())); }
-      catch(e){ S.err='Could not read the recording. Try again.'; res(null); }
+      try{res(await ctx.decodeAudioData(await new Blob(chunks,{type:rec.mimeType}).arrayBuffer()));}
+      catch(e){S.err='Could not read the recording. Try again.';res(null);}
     };
     rec.stop();
   });
 }
+async function toggleRec(key){
+  if(!S.recording){await startRec(key);return;}
+  const b=await stopRec();
+  if(b){S[key]=b;if(key==='buf')S.rev=reversed(b);}
+  render();
+}
 function reversed(b){
-  const r = ctx.createBuffer(b.numberOfChannels,b.length,b.sampleRate);
-  for(let c=0;c<b.numberOfChannels;c++) r.getChannelData(c).set(b.getChannelData(c).slice().reverse());
+  const r=ctx.createBuffer(b.numberOfChannels,b.length,b.sampleRate);
+  for(let c=0;c<b.numberOfChannels;c++)r.getChannelData(c).set(b.getChannelData(c).slice().reverse());
   return r;
 }
-function play(buffer,onEnd){
-  ensureCtx(); stopPlay();
-  const s = ctx.createBufferSource(); s.buffer=buffer; s.connect(ctx.destination);
-  s.onended=()=>{ if(S.playing===s){S.playing=null; onEnd&&onEnd(); render();} };
-  S.playing=s; s.start(); render();
+function play(buffer,rate=1){
+  ensureCtx();stopPlay();
+  const s=ctx.createBufferSource();s.buffer=buffer;s.playbackRate.value=rate;s.connect(ctx.destination);
+  s.onended=()=>{if(S.playing===s){S.playing=null;render();}};
+  S.playing=s;S.pb=buffer;S.pstart=ctx.currentTime;S.prate=rate;s.start();render();raf();
 }
-function stopPlay(){ const s=S.playing; S.playing=null; if(s){try{s.stop()}catch(e){}} }
-
-async function toggleRec(key){
-  if(!S.recording){ await startRec(); return; }
-  const b = await stopRec(); if(b) S[key]=b; render();
+function stopPlay(){const s=S.playing;S.playing=null;if(s){try{s.stop()}catch(e){}}}
+function raf(){drawWf();if(S.playing)requestAnimationFrame(raf);}
+function drawWf(){
+  const c=document.getElementById('wf');if(!c)return;
+  const b=S.pb||(S.step==='guess'?S.rev:S.buf)||S.buf;
+  const w=c.width=c.clientWidth*2,h=c.height=140,g=c.getContext('2d');
+  g.clearRect(0,0,w,h);if(!b)return;
+  const d=b.getChannelData(0),step=Math.ceil(d.length/w);g.fillStyle='#ff5c8a';
+  for(let x=0;x<w;x++){let m=0;for(let i=0;i<step;i+=8)m=Math.max(m,Math.abs(d[x*step+i]||0));
+    const y=Math.max(2,m*h);g.fillRect(x,(h-y)/2,1,y);}
+  if(S.playing){const p=Math.min(1,(ctx.currentTime-S.pstart)*S.prate/b.duration);g.fillStyle='#fff';g.fillRect(p*w,0,3,h);}
 }
-const norm=t=>t.toLowerCase().replace(/[^a-z0-9ऀ-࿿ ]/g,'').replace(/\s+/g,' ').trim();
+function env(b){
+  const d=b.getChannelData(0),bins=40,out=[],sz=Math.floor(d.length/bins)||1;
+  for(let k=0;k<bins;k++){let s=0;for(let i=0;i<sz;i+=4)s+=Math.abs(d[k*sz+i]||0);out.push(s);}return out;
+}
+function corr(a,b){
+  const n=a.length,ma=a.reduce((x,y)=>x+y)/n,mb=b.reduce((x,y)=>x+y)/n;let t=0,va=0,vb=0;
+  for(let i=0;i<n;i++){t+=(a[i]-ma)*(b[i]-mb);va+=(a[i]-ma)**2;vb+=(b[i]-mb)**2;}
+  return t/Math.sqrt(va*vb||1);
+}
+function wav(b){
+  const d=b.getChannelData(0),buf=new ArrayBuffer(44+d.length*2),v=new DataView(buf);
+  const ws=(o,s)=>[...s].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));
+  ws(0,'RIFF');v.setUint32(4,36+d.length*2,true);ws(8,'WAVEfmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);
+  v.setUint16(22,1,true);v.setUint32(24,b.sampleRate,true);v.setUint32(28,b.sampleRate*2,true);v.setUint16(32,2,true);
+  v.setUint16(34,16,true);ws(36,'data');v.setUint32(40,d.length*2,true);
+  for(let i=0;i<d.length;i++)v.setInt16(44+i*2,Math.max(-1,Math.min(1,d[i]))*32767,true);
+  return new Blob([buf],{type:'audio/wav'});
+}
+async function share(){
+  const f=new File([wav(S.rev)],'reversed-song.wav',{type:'audio/wav'});
+  try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:'Guess this reversed song!'});return;}}catch(e){return;}
+  const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;a.click();
+}
 
 function render(){
-  const n=S.names, sg=n[S.singer], gs=n[1-S.singer];
-  let h = `<h1>🎤 Reverse Singing</h1>`;
-  if(S.step!=='setup') h += `<div class="score"><span>${n[0]}: <b>${S.scores[0]}</b></span><span>${n[1]}: <b>${S.scores[1]}</b></span></div>`;
-  if(S.err) h += `<div class="card bad">${S.err}</div>`;
+  const a=document.activeElement,id=a&&a.id,pos=a&&a.selectionStart;
+  const sg=singer(),gs=guesser();
+  let h=`<h1>🎤 Reverse Singing</h1>`;
+  if(S.step!=='setup')h+=`<div class="score">${S.players.map((p,i)=>`<span class="${i===S.cur&&S.step!=='final'?'me':''}">${esc(p.name)}: <b>${p.score}</b></span>`).join('')}</div>
+    ${S.step!=='final'?`<p class="sub">Round ${S.round+1} of ${S.total}</p>`:''}`;
+  if(S.err)h+=`<div class="card bad">${S.err}</div>`;
 
   if(S.step==='setup'){
-    h += `<p class="sub">One sings secretly. The other guesses from the reversed audio.</p>
-    <div class="card"><small>Player names</small>
-      <input id="n0" value="${n[0]}"><input id="n1" value="${n[1]}">
-      <p><small>Listens allowed for the guesser</small></p>
-      <div class="row">${[3,5,7].map(x=>`<button class="opt ${S.listens===x?'sel':''}" onclick="S.listens=${x};render()">${x}</button>`).join('')}</div>
+    h+=`<p class="sub">One sings secretly. The next player guesses from the reversed audio.</p>
+    <div class="card"><small>Players (2 to 6)</small>
+      ${S.players.map((p,i)=>`<input id="n${i}" value="${esc(p.name)}">`).join('')}
+      <div class="row"><button onclick="addP(1)" ${N()>=6?'disabled':''}>+ Player</button><button onclick="addP(-1)" ${N()<=2?'disabled':''}>− Player</button></div>
+      <p><small>Listens for the guesser</small></p>
+      <div class="row">${[3,5,7].map(x=>`<button class="opt ${S.listens===x?'sel':''}" onclick="readNames();S.listens=${x};render()">${x}</button>`).join('')}</div>
+      <p><small>Max recording time</small></p>
+      <div class="row">${[15,30,60].map(x=>`<button class="opt ${S.limit===x?'sel':''}" onclick="readNames();S.limit=${x};render()">${x}s</button>`).join('')}</div>
+      <p><small>Turns each as singer</small></p>
+      <div class="row">${[1,2,3].map(x=>`<button class="opt ${S.rpp===x?'sel':''}" onclick="readNames();S.rpp=${x};render()">${x}</button>`).join('')}</div>
       <button class="p" onclick="start()">Start game</button></div>`;
   }
   else if(S.step==='sing'){
-    h += `<p class="sub">${sg}: sing secretly. ${gs}, look away!</p><div class="card">
-      <small>Song name (secret)</small><input id="title" placeholder="e.g. Happy Birthday" value="${S.title}" oninput="S.title=this.value">
-      <button class="${S.recording?'rec':'p'}" onclick="toggleRec('buf')">${S.recording?'⏹ Stop':(S.buf?'🔁 Re-record':'⏺ Record')}</button>
-      ${S.buf&&!S.recording?`
-      <div class="row"><button onclick="play(S.buf)">▶ Forward</button><button onclick="play(reversed(S.buf))">◀ Reversed</button></div>
+    h+=`<p class="sub">${esc(sg.name)}: sing secretly. Others, look away!</p><div class="card">
+      <div class="row"><input id="title" placeholder="Song name (secret)" value="${esc(S.title)}" oninput="S.title=this.value;lockState()">
+      <button style="flex:0 0 56px" onclick="S.title=SONGS[Math.random()*SONGS.length|0];render()">🎲</button></div>
+      <select id="cat" onchange="S.cat=this.value">${CATS.map(c=>`<option ${c===S.cat?'selected':''}>${c}</option>`).join('')}</select>
+      <button class="${S.recording?'rec':'p'}" onclick="toggleRec('buf')">${S.recording?`⏹ Stop (<span id="tm">${S.t}s</span>)`:(S.buf?'🔁 Re-record':'⏺ Record')}</button>
+      ${S.buf&&!S.recording?`<canvas id="wf"></canvas>
+      <div class="row"><button onclick="play(S.buf)">▶ Forward</button><button onclick="play(S.rev)">◀ Reversed</button></div>
       ${S.playing?`<button onclick="stopPlay();render()">⏹ Stop playing</button>`:''}
-      <button class="g" onclick="lockIn()" ${S.title.trim()?'':'disabled'}>✅ Lock it in</button>
-      ${S.title.trim()?'':'<small>Type the song name to continue.</small>'}`:''}
+      <button id="lock" class="g" onclick="lockIn()" ${S.title.trim()?'':'disabled'}>✅ Lock it in</button>`:''}
     </div>`;
   }
+  else if(S.step==='pass'){
+    h+=`<div class="card"><div class="big">📱➡️</div><p class="sub">Pass the phone to <b>${esc(gs.name)}</b></p>
+      <button class="p" onclick="S.step='guess';render()">I'm ${esc(gs.name)}, ready!</button></div>`;
+  }
   else if(S.step==='guess'){
-    h += `<p class="sub">${gs}: guess the song!</p><div class="card">
+    h+=`<p class="sub">${esc(gs.name)}: guess the song!</p><div class="card">
       <div class="big">${S.left} listen${S.left==1?'':'s'} left</div>
+      <canvas id="wf"></canvas>
+      <div class="row"><button class="opt ${S.speed===1?'sel':''}" onclick="S.speed=1;render()">1× speed</button><button class="opt ${S.speed===.5?'sel':''}" onclick="S.speed=.5;render()">0.5× slow</button></div>
       <button class="p" onclick="listen()" ${S.left<1||S.playing?'disabled':''}>◀ Play reversed</button>
-      ${S.playing?`<button onclick="stopPlay();render()">⏹ Stop</button>`:''}</div>
-    <div class="card"><b>Sing it back</b><br><small>Copy the weird sounds you heard, then play your take in reverse.</small>
-      <button class="${S.recording?'rec':''}" onclick="toggleRec('take')">${S.recording?'⏹ Stop':(S.take?'🔁 Re-record':'⏺ Record my take')}</button>
+      ${S.playing?`<button onclick="stopPlay();render()">⏹ Stop</button>`:''}
+      ${S.hint?`<div class="hint">💡 ${S.cat} · starts with “${esc(S.title.trim()[0]||'?').toUpperCase()}” · ${S.title.trim().split(/\s+/).length} word(s)</div>`
+        :`<button onclick="getHint()" ${S.left<2?'disabled':''}>💡 Hint (costs 1 listen)</button>`}</div>
+    <div class="card"><b>Sing it back</b><br><small>Copy the weird sounds, then hear your take reversed. A close match earns a hum bonus!</small>
+      <button class="${S.recording?'rec':''}" onclick="toggleRec('take')">${S.recording?`⏹ Stop (<span id="tm">${S.t}s</span>)`:(S.take?'🔁 Re-record':'⏺ Record my take')}</button>
       ${S.take&&!S.recording?`<button onclick="play(reversed(S.take))">◀ Play my take reversed</button>`:''}</div>
     <div class="card"><small>Your guess</small>
-      <input id="guess" placeholder="Song name" value="${S.guess}" oninput="S.guess=this.value">
+      <input id="guess" placeholder="Song name" value="${esc(S.guess)}" oninput="S.guess=this.value">
       <button class="g" onclick="submitGuess()">Submit guess</button></div>`;
   }
   else if(S.step==='result'){
-    const ok = norm(S.guess)&&norm(S.guess)===norm(S.title);
-    h += `<div class="card"><div class="big ${ok?'ok':'bad'}">${ok?'🎉 Correct!':'❌ Not quite'}</div>
-      <p>Answer: <b>${S.title}</b><br>Guess: <b>${S.guess||'(none)'}</b></p>
-      <div class="row"><button onclick="play(S.buf)">▶ Original</button><button onclick="play(reversed(S.buf))">◀ Reversed</button></div>
-      ${!ok?`<button onclick="award()">Count as correct (close enough)</button>`:''}
-      <button class="p" onclick="next(${ok})">Next round (swap roles)</button></div>`;
+    h+=`<div class="card"><div class="big ${S.scored?'ok':'bad'}">${S.scored?'🎉 Correct!':'❌ Not quite'}</div>
+      <p>Answer: <b>${esc(S.title)}</b><br>Guess: <b>${esc(S.guess)||'(none)'}</b></p>
+      ${S.scored?`<p class="ok">+${S.pts} points${S.hum>.5?' (incl. hum bonus 🎶)':''}</p>`:''}
+      <canvas id="wf"></canvas>
+      <div class="row"><button onclick="play(S.buf)">▶ Original</button><button onclick="play(S.rev)">◀ Reversed</button></div>
+      <button onclick="share()">📤 Share reversed clip</button>
+      ${!S.scored?`<button onclick="award()">Count as correct (close enough)</button>`:''}
+      <button class="p" onclick="next()">${S.round+1>=S.total?'See final scores':'Next round'}</button></div>`;
   }
-  $app.innerHTML = h;
+  else if(S.step==='final'){
+    const r=[...S.players].sort((x,y)=>y.score-x.score);
+    h+=`<div class="card"><div class="big">🏆 ${esc(r[0].name)} wins!</div>
+      ${r.map((p,i)=>`<p>${i+1}. ${esc(p.name)} — <b>${p.score}</b></p>`).join('')}
+      <button class="p" onclick="S.players.forEach(p=>p.score=0);S.step='setup';render()">Play again</button></div>`;
+  }
+  $app.innerHTML=h;drawWf();
+  if(id){const e=document.getElementById(id);if(e){e.focus();try{e.setSelectionRange(pos,pos)}catch(x){}}}
 }
-function start(){
-  S.names=[document.getElementById('n0').value||'Player 1',document.getElementById('n1').value||'Player 2'];
-  S.singer=0; newRound();
+function lockState(){const b=document.getElementById('lock');if(b)b.disabled=!S.title.trim();}
+function readNames(){S.players.forEach((p,i)=>{const e=document.getElementById('n'+i);if(e)p.name=e.value||'Player '+(i+1);});}
+function addP(d){readNames();if(d>0)S.players.push({name:'Player '+(N()+1),score:0});else S.players.pop();render();}
+function start(){readNames();S.players.forEach(p=>p.score=0);S.cur=0;S.round=0;S.total=N()*S.rpp;newRound();}
+function newRound(){stopPlay();S.step='sing';S.buf=S.rev=S.take=S.pb=null;S.title='';S.guess='';S.hint=false;S.scored=false;S.hum=0;S.pts=0;S.err='';render();}
+function lockIn(){stopPlay();S.left=S.listens;S.take=null;S.pb=null;S.guess='';S.hint=false;S.step='pass';render();}
+function listen(){if(S.left<1)return;S.left--;play(S.rev,S.speed);}
+function getHint(){if(S.left<2)return;S.left--;S.hint=true;render();}
+function submitGuess(){
+  stopPlay();S.pb=null;
+  if(norm(S.guess)&&norm(S.guess)===norm(S.title))score();
+  S.step='result';render();
 }
-function newRound(){ S.awarded=false; stopPlay(); S.step='sing'; S.buf=null; S.take=null; S.title=''; S.guess=''; S.err=''; render(); }
-function lockIn(){ stopPlay(); S.left=S.listens; S.take=null; S.guess=''; S.step='guess'; render(); }
-function listen(){ if(S.left<1)return; S.left--; play(reversed(S.buf)); }
-function submitGuess(){ stopPlay(); S.step='result'; render(); }
-function award(){ if(S.awarded)return; S.awarded=true; S.scores[1-S.singer]++; render(); }
-function next(ok){ if(ok) S.scores[1-S.singer]++; S.singer=1-S.singer; newRound(); }
+function score(){
+  if(S.scored)return;
+  S.hum=S.take?corr(env(S.buf),env(reversed(S.take))):0;
+  S.pts=5+S.left+(S.hum>.5?3:0);
+  guesser().score+=S.pts;S.scored=true;
+}
+function award(){score();render();}
+function next(){
+  stopPlay();S.round++;
+  if(S.round>=S.total){S.step='final';render();return;}
+  S.cur=(S.cur+1)%N();newRound();
+}
+if('serviceWorker'in navigator)try{navigator.serviceWorker.register('sw.js')}catch(e){}
 render();
 </script>
 </body>
