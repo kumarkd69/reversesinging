@@ -59,7 +59,8 @@ async function getMic(){
 async function startRec(key){
   ensureCtx();stopPlay();
   try{
-    const st=await getMic();chunks=[];rec=new MediaRecorder(st);
+    try{navigator.audioSession.type='play-and-record'}catch(e){}
+    const st=await getMic();st.getTracks().forEach(t=>t.enabled=true);chunks=[];rec=new MediaRecorder(st);
     rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
     rec.start();S.recording=true;S.err='';S.t=S.limit;render();
     timer=setInterval(()=>{S.t--;const el=document.getElementById('tm');if(el)el.textContent=S.t+'s';if(S.t<=0)toggleRec(key);},1000);
@@ -70,7 +71,8 @@ function stopRec(){
   return new Promise(res=>{
     rec.onstop=async()=>{
       S.recording=false;
-      if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+      if(stream)stream.getTracks().forEach(t=>t.enabled=false);
+      try{navigator.audioSession.type='playback'}catch(e){}
       try{res(norm_(await ctx.decodeAudioData(await new Blob(chunks,{type:rec.mimeType}).arrayBuffer())));}
       catch(e){S.err='Could not read the recording. Try again.';res(null);}
     };
@@ -208,7 +210,7 @@ function render(){
 function lockState(){}
 function readNames(){S.players.forEach((p,i)=>{const e=document.getElementById('n'+i);if(e)p.name=e.value||'Player '+(i+1);});}
 function addP(d){readNames();if(d>0)S.players.push({name:'Player '+(N()+1),score:0});else S.players.pop();render();}
-function start(){readNames();S.players.forEach(p=>p.score=0);S.cur=0;S.round=0;S.total=N()*S.rpp;newRound();}
+function start(){ensureCtx();getMic().then(t=>t.getTracks().forEach(x=>x.enabled=false)).catch(()=>{});readNames();S.players.forEach(p=>p.score=0);S.cur=0;S.round=0;S.total=N()*S.rpp;newRound();}
 function newRound(){stopPlay();S.step='sing';S.buf=S.rev=S.take=S.pb=null;S.title='';S.guess='';S.hint=false;S.scored=false;S.decided=false;S.hum=0;S.pts=0;S.err='';render();}
 function lockIn(){stopPlay();S.left=S.listens;S.take=null;S.pb=null;S.guess='';S.hint=false;S.step='pass';render();}
 function listen(){if(S.left<1)return;S.left--;play(S.rev,S.speed);}
