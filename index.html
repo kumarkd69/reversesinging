@@ -158,14 +158,14 @@ function render(){
   }
   else if(S.step==='sing'){
     h+=`<p class="sub">${esc(sg.name)}: sing secretly. Others, look away!</p><div class="card">
-      <div class="row"><input id="title" placeholder="Song name (secret)" value="${esc(S.title)}" oninput="S.title=this.value;lockState()">
+      <div class="row"><input id="title" placeholder="Song name (optional, secret)" value="${esc(S.title)}" oninput="S.title=this.value;lockState()">
       <button style="flex:0 0 56px" onclick="S.title=SONGS[Math.random()*SONGS.length|0];render()">🎲</button></div>
       <select id="cat" onchange="S.cat=this.value">${CATS.map(c=>`<option ${c===S.cat?'selected':''}>${c}</option>`).join('')}</select>
       <button class="${S.recording?'rec':'p'}" onclick="toggleRec('buf')">${S.recording?`⏹ Stop (<span id="tm">${S.t}s</span>)`:(S.buf?'🔁 Re-record':'⏺ Record')}</button>
       ${S.buf&&!S.recording?`<canvas id="wf"></canvas>
       <div class="row"><button onclick="play(S.buf)">▶ Forward</button><button onclick="play(S.rev)">◀ Reversed</button></div>
       ${S.playing?`<button onclick="stopPlay();render()">⏹ Stop playing</button>`:''}
-      <button id="lock" class="g" onclick="lockIn()" ${S.title.trim()?'':'disabled'}>✅ Lock it in</button>`:''}
+      <button id="lock" class="g" onclick="lockIn()">✅ Lock it in</button>`:''}
     </div>`;
   }
   else if(S.step==='pass'){
@@ -179,24 +179,22 @@ function render(){
       <div class="row"><button class="opt ${S.speed===1?'sel':''}" onclick="S.speed=1;render()">1× speed</button><button class="opt ${S.speed===.5?'sel':''}" onclick="S.speed=.5;render()">0.5× slow</button></div>
       <button class="p" onclick="listen()" ${S.left<1||S.playing?'disabled':''}>◀ Play reversed</button>
       ${S.playing?`<button onclick="stopPlay();render()">⏹ Stop</button>`:''}
-      ${S.hint?`<div class="hint">💡 ${S.cat} · starts with “${esc(S.title.trim()[0]||'?').toUpperCase()}” · ${S.title.trim().split(/\s+/).length} word(s)</div>`
+      ${S.hint?`<div class="hint">💡 ${S.cat} ${S.title.trim()?` · starts with “${esc(S.title.trim()[0]).toUpperCase()}” · ${S.title.trim().split(/\s+/).length} word(s)`:''}</div>`
         :`<button onclick="getHint()" ${S.left<2?'disabled':''}>💡 Hint (costs 1 listen)</button>`}</div>
     <div class="card"><b>Sing it back</b><br><small>Copy the weird sounds, then hear your take reversed. A close match earns a hum bonus!</small>
       <button class="${S.recording?'rec':''}" onclick="toggleRec('take')">${S.recording?`⏹ Stop (<span id="tm">${S.t}s</span>)`:(S.take?'🔁 Re-record':'⏺ Record my take')}</button>
       ${S.take&&!S.recording?`<button onclick="play(reversed(S.take))">◀ Play my take reversed</button>`:''}</div>
-    <div class="card"><small>Your guess</small>
-      <input id="guess" placeholder="Song name" value="${esc(S.guess)}" oninput="S.guess=this.value">
-      <button class="g" onclick="submitGuess()">Submit guess</button></div>`;
+    <div class="card"><button class="g" onclick="submitGuess()">Done guessing, reveal</button></div>`;
   }
   else if(S.step==='result'){
-    h+=`<div class="card"><div class="big ${S.scored?'ok':'bad'}">${S.scored?'🎉 Correct!':'❌ Not quite'}</div>
-      <p>Answer: <b>${esc(S.title)}</b><br>Guess: <b>${esc(S.guess)||'(none)'}</b></p>
+    h+=`<div class="card"><div class="big ${S.decided?(S.scored?'ok':'bad'):''}">${S.decided?(S.scored?'🎉 Correct!':'❌ Wrong'):'🔎 Reveal'}</div>
+      ${S.title.trim()?`<p>Song: <b>${esc(S.title)}</b></p>`:''}
       ${S.scored?`<p class="ok">+${S.pts} points${S.hum>.5?' (incl. hum bonus 🎶)':''}</p>`:''}
       <canvas id="wf"></canvas>
       <div class="row"><button onclick="play(S.buf)">▶ Original</button><button onclick="play(S.rev)">◀ Reversed</button></div>
       <button onclick="share()">📤 Share reversed clip</button>
-      ${!S.scored?`<button onclick="award()">Count as correct (close enough)</button>`:''}
-      <button class="p" onclick="next()">${S.round+1>=S.total?'See final scores':'Next round'}</button></div>`;
+      ${S.decided?`<button class="p" onclick="next()">${S.round+1>=S.total?'See final scores':'Next round'}</button>`
+      :`<p class="sub">Was ${esc(gs.name)}'s guess correct?</p><div class="row"><button class="g" onclick="mark(true)">✅ Correct</button><button style="background:var(--bad)" onclick="mark(false)">❌ Wrong</button></div>`}</div>`;
   }
   else if(S.step==='final'){
     const r=[...S.players].sort((x,y)=>y.score-x.score);
@@ -207,17 +205,16 @@ function render(){
   $app.innerHTML=h;drawWf();
   if(id){const e=document.getElementById(id);if(e){e.focus();try{e.setSelectionRange(pos,pos)}catch(x){}}}
 }
-function lockState(){const b=document.getElementById('lock');if(b)b.disabled=!S.title.trim();}
+function lockState(){}
 function readNames(){S.players.forEach((p,i)=>{const e=document.getElementById('n'+i);if(e)p.name=e.value||'Player '+(i+1);});}
 function addP(d){readNames();if(d>0)S.players.push({name:'Player '+(N()+1),score:0});else S.players.pop();render();}
 function start(){readNames();S.players.forEach(p=>p.score=0);S.cur=0;S.round=0;S.total=N()*S.rpp;newRound();}
-function newRound(){stopPlay();S.step='sing';S.buf=S.rev=S.take=S.pb=null;S.title='';S.guess='';S.hint=false;S.scored=false;S.hum=0;S.pts=0;S.err='';render();}
+function newRound(){stopPlay();S.step='sing';S.buf=S.rev=S.take=S.pb=null;S.title='';S.guess='';S.hint=false;S.scored=false;S.decided=false;S.hum=0;S.pts=0;S.err='';render();}
 function lockIn(){stopPlay();S.left=S.listens;S.take=null;S.pb=null;S.guess='';S.hint=false;S.step='pass';render();}
 function listen(){if(S.left<1)return;S.left--;play(S.rev,S.speed);}
 function getHint(){if(S.left<2)return;S.left--;S.hint=true;render();}
 function submitGuess(){
   stopPlay();S.pb=null;
-  if(norm(S.guess)&&norm(S.guess)===norm(S.title))score();
   S.step='result';render();
 }
 function score(){
@@ -226,7 +223,7 @@ function score(){
   S.pts=5+S.left+(S.hum>.5?3:0);
   guesser().score+=S.pts;S.scored=true;
 }
-function award(){score();render();}
+function mark(ok){if(S.decided)return;S.decided=true;if(ok)score();stopPlay();render();}
 function next(){
   stopPlay();S.round++;
   if(S.round>=S.total){S.step='final';render();return;}
