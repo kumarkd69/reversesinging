@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1b1033">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Reverse Singing</title>
+<style>
+:root{--bg:#1b1033;--card:#2a1b4d;--fg:#f4eefe;--mut:#b9a9d9;--acc:#ff5c8a;--ok:#3ddc97;--bad:#ff6b6b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.4 system-ui,sans-serif;min-height:100vh;padding:16px;display:flex;justify-content:center}
+main{width:100%;max-width:440px}
+h1{font-size:24px;margin:4px 0 2px;text-align:center}
+.sub{color:var(--mut);text-align:center;margin:0 0 14px}
+.card{background:var(--card);border-radius:16px;padding:16px;margin-bottom:12px}
+button{font:inherit;font-weight:600;border:0;border-radius:12px;padding:14px;width:100%;margin-top:8px;background:#4a3585;color:var(--fg)}
+button.p{background:var(--acc)}button.g{background:var(--ok);color:#052}
+button:disabled{opacity:.4}
+input{font:inherit;width:100%;padding:12px;border-radius:10px;border:0;margin-top:6px}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.opt.sel{background:var(--acc)}
+.score{display:flex;justify-content:space-around;color:var(--mut);margin-bottom:10px}
+.score b{color:var(--fg)}
+.big{font-size:34px;text-align:center;margin:6px 0}
+.rec{background:var(--bad)!important;animation:p 1s infinite}
+@keyframes p{50%{opacity:.6}}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+small{color:var(--mut)}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+const $app = document.getElementById('app');
+const AC = window.AudioContext || window.webkitAudioContext;
+let ctx, stream;
+const S = {step:'setup', names:['Player 1','Player 2'], scores:[0,0], singer:0, listens:5,
+  left:0, title:'', buf:null, take:null, guess:'', playing:null, recording:false, err:''};
+
+function ensureCtx(){ if(!ctx) ctx = new AC(); if(ctx.state==='suspended') ctx.resume(); }
+async function getMic(){
+  if(stream && stream.active) return stream;
+  stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false}});
+  return stream;
+}
+let rec, chunks;
+async function startRec(){
+  ensureCtx(); stopPlay();
+  try{
+    const st = await getMic();
+    chunks=[]; rec = new MediaRecorder(st);
+    rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+    rec.start(); S.recording=true; S.err=''; render();
+  }catch(e){ S.err='Microphone blocked. Allow mic access and use https.'; render(); }
+}
+function stopRec(){
+  return new Promise(res=>{
+    rec.onstop=async()=>{
+      S.recording=false;
+      const blob = new Blob(chunks,{type:rec.mimeType});
+      try{ res(await ctx.decodeAudioData(await blob.arrayBuffer())); }
+      catch(e){ S.err='Could not read the recording. Try again.'; res(null); }
+    };
+    rec.stop();
+  });
+}
+function reversed(b){
+  const r = ctx.createBuffer(b.numberOfChannels,b.length,b.sampleRate);
+  for(let c=0;c<b.numberOfChannels;c++) r.getChannelData(c).set(b.getChannelData(c).slice().reverse());
+  return r;
+}
+function play(buffer,onEnd){
+  ensureCtx(); stopPlay();
+  const s = ctx.createBufferSource(); s.buffer=buffer; s.connect(ctx.destination);
+  s.onended=()=>{ if(S.playing===s){S.playing=null; onEnd&&onEnd(); render();} };
+  S.playing=s; s.start(); render();
+}
+function stopPlay(){ const s=S.playing; S.playing=null; if(s){try{s.stop()}catch(e){}} }
+
+async function toggleRec(key){
+  if(!S.recording){ await startRec(); return; }
+  const b = await stopRec(); if(b) S[key]=b; render();
+}
+const norm=t=>t.toLowerCase().replace(/[^a-z0-9ऀ-࿿ ]/g,'').replace(/\s+/g,' ').trim();
+
+function render(){
+  const n=S.names, sg=n[S.singer], gs=n[1-S.singer];
+  let h = `<h1>🎤 Reverse Singing</h1>`;
+  if(S.step!=='setup') h += `<div class="score"><span>${n[0]}: <b>${S.scores[0]}</b></span><span>${n[1]}: <b>${S.scores[1]}</b></span></div>`;
+  if(S.err) h += `<div class="card bad">${S.err}</div>`;
+
+  if(S.step==='setup'){
+    h += `<p class="sub">One sings secretly. The other guesses from the reversed audio.</p>
+    <div class="card"><small>Player names</small>
+      <input id="n0" value="${n[0]}"><input id="n1" value="${n[1]}">
+      <p><small>Listens allowed for the guesser</small></p>
+      <div class="row">${[3,5,7].map(x=>`<button class="opt ${S.listens===x?'sel':''}" onclick="S.listens=${x};render()">${x}</button>`).join('')}</div>
+      <button class="p" onclick="start()">Start game</button></div>`;
+  }
+  else if(S.step==='sing'){
+    h += `<p class="sub">${sg}: sing secretly. ${gs}, look away!</p><div class="card">
+      <small>Song name (secret)</small><input id="title" placeholder="e.g. Happy Birthday" value="${S.title}" oninput="S.title=this.value">
+      <button class="${S.recording?'rec':'p'}" onclick="toggleRec('buf')">${S.recording?'⏹ Stop':(S.buf?'🔁 Re-record':'⏺ Record')}</button>
+      ${S.buf&&!S.recording?`
+      <div class="row"><button onclick="play(S.buf)">▶ Forward</button><button onclick="play(reversed(S.buf))">◀ Reversed</button></div>
+      ${S.playing?`<button onclick="stopPlay();render()">⏹ Stop playing</button>`:''}
+      <button class="g" onclick="lockIn()" ${S.title.trim()?'':'disabled'}>✅ Lock it in</button>
+      ${S.title.trim()?'':'<small>Type the song name to continue.</small>'}`:''}
+    </div>`;
+  }
+  else if(S.step==='guess'){
+    h += `<p class="sub">${gs}: guess the song!</p><div class="card">
+      <div class="big">${S.left} listen${S.left==1?'':'s'} left</div>
+      <button class="p" onclick="listen()" ${S.left<1||S.playing?'disabled':''}>◀ Play reversed</button>
+      ${S.playing?`<button onclick="stopPlay();render()">⏹ Stop</button>`:''}</div>
+    <div class="card"><b>Sing it back</b><br><small>Copy the weird sounds you heard, then play your take in reverse.</small>
+      <button class="${S.recording?'rec':''}" onclick="toggleRec('take')">${S.recording?'⏹ Stop':(S.take?'🔁 Re-record':'⏺ Record my take')}</button>
+      ${S.take&&!S.recording?`<button onclick="play(reversed(S.take))">◀ Play my take reversed</button>`:''}</div>
+    <div class="card"><small>Your guess</small>
+      <input id="guess" placeholder="Song name" value="${S.guess}" oninput="S.guess=this.value">
+      <button class="g" onclick="submitGuess()">Submit guess</button></div>`;
+  }
+  else if(S.step==='result'){
+    const ok = norm(S.guess)&&norm(S.guess)===norm(S.title);
+    h += `<div class="card"><div class="big ${ok?'ok':'bad'}">${ok?'🎉 Correct!':'❌ Not quite'}</div>
+      <p>Answer: <b>${S.title}</b><br>Guess: <b>${S.guess||'(none)'}</b></p>
+      <div class="row"><button onclick="play(S.buf)">▶ Original</button><button onclick="play(reversed(S.buf))">◀ Reversed</button></div>
+      ${!ok?`<button onclick="award()">Count as correct (close enough)</button>`:''}
+      <button class="p" onclick="next(${ok})">Next round (swap roles)</button></div>`;
+  }
+  $app.innerHTML = h;
+}
+function start(){
+  S.names=[document.getElementById('n0').value||'Player 1',document.getElementById('n1').value||'Player 2'];
+  S.singer=0; newRound();
+}
+function newRound(){ S.awarded=false; stopPlay(); S.step='sing'; S.buf=null; S.take=null; S.title=''; S.guess=''; S.err=''; render(); }
+function lockIn(){ stopPlay(); S.left=S.listens; S.take=null; S.guess=''; S.step='guess'; render(); }
+function listen(){ if(S.left<1)return; S.left--; play(reversed(S.buf)); }
+function submitGuess(){ stopPlay(); S.step='result'; render(); }
+function award(){ if(S.awarded)return; S.awarded=true; S.scores[1-S.singer]++; render(); }
+function next(ok){ if(ok) S.scores[1-S.singer]++; S.singer=1-S.singer; newRound(); }
+render();
+</script>
+</body>
+</html>
